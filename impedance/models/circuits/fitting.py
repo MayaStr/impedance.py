@@ -3,6 +3,8 @@ import warnings
 import numpy as np
 from scipy.linalg import inv
 from scipy.optimize import curve_fit, basinhopping
+from lmfit import Parameter,Parameters, minimize, fit_report
+import itertools
 
 from .elements import circuit_elements, get_element_from_name
 
@@ -443,3 +445,92 @@ def check_and_eval(element):
                          f'allowed elements ({allowed_elements})')
     else:
         return eval(element, circuit_elements)
+
+def eval_circ(key, fit_params, circuit_dict,X):
+    params = [s + '_' + key for s in circuit_dict[key].get_param_names()[0]]
+    return wrapCircuit(circuit_dict[key].circuit, circuit_dict[key].constants)(X,*[fit_params[param] for param in params])
+def objective_multiple(fit_params, circuit_dict, X_dict, y_dict, weight_dict):
+    """Calculate total residual for fits of several data sets."""
+    ndata = len(X_dict)
+    res_dict = dict.fromkeys(X_dict.keys())
+
+    # make residual per data set
+    for key, X in X_dict.items():
+        res_dict[key] = (np.hstack([y_dict[key].real,y_dict[key].imag]) - eval_circ(key, fit_params, circuit_dict,X))*weight_dict[key]
+    # flatten this to a 1D array, as minimize() needs
+    return [x for v in res_dict.values() for x in v]
+def multicircuit_fit(circuits, freqs, Zs, sigmas, replaces,
+                bounds=None, **kwargs):
+
+    """ Fitting the same equivalent circuit to multiple datasets.
+    Parameters
+    -----------------
+    frequencies : numpy array
+        Frequencies
+
+    impedances : numpy array of dtype 'complex128'
+        Impedances
+
+    circuit : string
+        String defining the equivalent circuit to be fit
+
+    bounds : 2-tuple of array_like, optional
+        Lower and upper bounds on parameters. Defaults to bounds on all
+        parameters of 0 and np.inf, except the CPE alpha
+        which has an upper bound of 1
+
+    kwargs :
+        Keyword arguments passed to scipy.optimize.curve_fit or
+        scipy.optimize.basinhopping
+
+    Returns
+    ------------
+    p_values : list of floats
+        best fit parameters for specified equivalent circuit
+
+    p_errors : list of floats
+        one standard deviation error estimates for fit parameters
+
+    Notes
+    ---------
+    Need to do a better job of handling errors in fitting.
+    Currently, an error of -1 is returned.
+
+    """
+    # Check if all circuits are the same
+    c = circuits[0].get_param_names()
+    for circuit in circuits:
+        if not circuit.get_param_names() == c:
+            print('Circuits not equal!')
+    # Create parameters of function
+    fit_params = Parameters()
+    X_dict = dict()
+    Y_dict= dict()
+    circuit_dict= dict()
+    weight_dict= dict()
+    for i, (circuit, freq, Z, sigma) in enumerate(zip(circuits, freqs, Zs, sigmas)):
+        # add with tuples: (NAME VALUE VARY MIN  MAX  EXPR  BRUTE_STEP)
+        name = str(i).zfill(2)
+        p_init = np.array(circuit.initial_guess)
+        p = list(
+            zip([s + '_' + name for s in circuit.get_param_names()[0]], p_init, itertools.repeat(True), p_init * 0.001,
+                p_init * 100, itertools.repeat(None), itertools.repeat(None)))
+        fit_params.add_many(*p)
+        X_dict[name] = freq
+        Y_dict[name] = Z
+        circuit_dict[name] = circuit
+        weight_dict[name] = sigma
+
+    # Set specified parameters as function
+    for replace in replaces:
+        for i, (circuit, freq, Z, sigma,) in enumerate(zip(circuits, freqs, Zs, sigmas)):
+            name = str(i).zfill(2)
+            expr = replace.expr
+            for key, value in replace.new_X.items():
+                expr = expr.replace(key, str(value[i]))
+            fit_params[replace.par+'_'+name].expr = expr
+        fit_params.add_many(*replace.new_pars)
+    # Minimize
+    out = minimize(objective_multiple, fit_params, args=(circuit_dict, X_dict, Y_dict, weight_dict))
+    return fit_params
+

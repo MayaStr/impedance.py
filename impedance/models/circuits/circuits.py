@@ -1,4 +1,4 @@
-from .fitting import circuit_fit, buildCircuit
+from .fitting import circuit_fit, buildCircuit,multicircuit_fit
 from .fitting import calculateCircuitLength, check_and_eval
 from impedance.visualization import plot_altair, plot_bode, plot_nyquist
 from .elements import circuit_elements, get_element_from_name
