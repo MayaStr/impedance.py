@@ -105,6 +105,7 @@ class BaseCircuit:
                                            **kwargs)
             self.parameters_ = parameters
             if conf is not None:
+
                 self.conf_ = conf
         else:
             raise ValueError('No initial guess supplied')
